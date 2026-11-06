@@ -517,10 +517,27 @@ tailwind.config = { theme: { extend: {
       <label class="flex items-center gap-2 text-sm mt-3"><input type="checkbox" x-model="sc.enabled" @change="persistSync(); scheduleSync(300)"> เปิดการซิงค์กับ Google Sheet</label>
       <div class="flex flex-wrap gap-2 mt-3">
         <button class="btn bg-white border border-navy-700 text-navy-700 hover:bg-navy-50" @click="testSheet()">ทดสอบการเชื่อมต่อ</button>
+        <button class="btn bg-white border border-navy-700 text-navy-700 hover:bg-navy-50 disabled:opacity-50" :disabled="diagBusy" @click="diagnoseSheet()" x-text="diagBusy ? 'กำลังตรวจสอบ...' : 'ตรวจสอบละเอียด (หาสาเหตุ)'"></button>
         <button class="btn bg-navy-700 text-white hover:bg-navy-800" @click="syncNow().then(ok => msg(ok, ok ? 'ซิงค์เสร็จแล้ว' : 'ซิงค์ไม่สำเร็จ: ' + syncErr))">ซิงค์ตอนนี้</button>
         <button class="btn bg-white border border-navy-700 text-navy-700 hover:bg-navy-50" @click="uploadMaster()">อัปโหลดพนักงาน / ทะเบียน / เรท จากเครื่องนี้</button>
       </div>
       <p class="text-sm mt-2" :class="syncErr ? 'text-red-600' : 'text-slate-600'" x-text="syncLabel"></p>
+      <div x-show="diag.length" class="mt-3 space-y-1">
+        <div class="lbl">ผลการตรวจสอบ</div>
+        <template x-for="(st, i) in diag" :key="i">
+          <div class="text-sm flex gap-2">
+            <span class="font-bold" :class="st.ok ? 'text-green-700' : 'text-red-600'" x-text="st.ok ? '✓' : '✗'"></span>
+            <span><b x-text="st.label"></b> <span :class="st.ok ? 'text-slate-600' : 'text-red-700'" x-text="st.detail"></span></span>
+          </div>
+        </template>
+      </div>
+      <div class="mt-3">
+        <div class="lbl">บันทึกการซิงค์ (อัปเดตสด)</div>
+        <div class="text-xs max-h-40 overflow-auto border border-slate-200 rounded p-2 bg-slate-50 space-y-0.5">
+          <template x-for="(l, i) in syncLog" :key="l.t + i"><div :class="l.kind === 'err' ? 'text-red-700' : 'text-slate-700'" x-text="l.t + '  ' + l.text"></div></template>
+          <div x-show="!syncLog.length" class="text-slate-500">ยังไม่มีรายการซิงค์</div>
+        </div>
+      </div>
       <p x-show="sc.enabled && sc.since && !sc.cfgReady" class="text-xs text-amber-700 mt-1">ยังไม่มีข้อมูลพนักงานและทะเบียนใน Sheet ให้ Admin กด "อัปโหลด..." จากเครื่องที่ตั้งค่าไว้ถูกต้อง เครื่องอื่นจะได้รับข้อมูลนั้นอัตโนมัติ</p>
     </div>
 
@@ -679,7 +696,8 @@ function dispatchApp() {
   const KEY = 'vschem-dispatch-v1', MKEY = 'vschem-master-v1', HKEY = 'vschem-history-v1';
   const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
   const SYNC_KEY = 'vschem-sync-v1';
-  const DEFAULT_SYNC_URL = 'https://script.google.com/macros/s/AKfycbznUBIgBS-JYFFwi1rydV-dE5jeeRHVZts0amlXuhVv3KaKIQlfbrZ_ktkx2xW9UT1R/exec';
+  const DEFAULT_SYNC_URL = 'https://script.google.com/macros/s/AKfycbyxKfUr13qdBfmYrB9l20XqLJi6NxPrSehsPTEHnIWaSjLrMnzJDCMn103sPJNc0dOW/exec';
+  const OLD_SYNC_URLS = ['https://script.google.com/macros/s/AKfycbznUBIgBS-JYFFwi1rydV-dE5jeeRHVZts0amlXuhVv3KaKIQlfbrZ_ktkx2xW9UT1R/exec'];   // ลิงก์เก่า: เครื่องที่ยังเก็บไว้จะถูกเปลี่ยนเป็นลิงก์ใหม่อัตโนมัติ
   const stable = v => JSON.stringify(v, (k, val) => (val && typeof val === 'object' && !Array.isArray(val))
     ? Object.keys(val).sort().reduce((o, key) => { o[key] = val[key]; return o; }, {}) : val);
   const hash = str => { let h = 5381; for (let i = 0; i < str.length; i++) h = ((h << 5) + h) ^ str.charCodeAt(i); return (h >>> 0).toString(36) + '.' + str.length; };
@@ -732,7 +750,8 @@ function dispatchApp() {
     empSearch: '', empFilter: 'all', docSeqInput: null,
     exp: { from: today().slice(0, 8) + '01', to: today(), unverified: false },
     sc: { url: DEFAULT_SYNC_URL, token: '', enabled: true, since: 0, sigs: {}, cfgReady: false, forceCfg: false, pendingDeletes: [], lastOk: '' },
-    syncBusy: false, syncAgain: false, syncErr: '', syncTimer: null, newVeh: { plate: '', note: '' }, adminMsg: '', adminOk: true,
+    syncBusy: false, syncAgain: false, syncErr: '', syncTimer: null,
+    diag: [], diagBusy: false, syncLog: [], newVeh: { plate: '', note: '' }, adminMsg: '', adminOk: true,
     units: ['KG','TON','PAIL','BAG','DRUM','IBC','CARTON','PCS'],
     checklistLabels: {
       pack: 'ภาชนะบรรจุ วัสดุบรรจุ และฉลากอยู่ในสภาพสมบูรณ์ก่อนการขนส่ง',
@@ -1176,6 +1195,7 @@ function dispatchApp() {
     // ---- Google Sheet sync (offline-first, last write wins per document) ----
     loadSync() {
       try { const x = JSON.parse(localStorage.getItem(SYNC_KEY) || 'null'); if (x && typeof x === 'object') this.sc = Object.assign(this.sc, x); } catch (e) { /* ใช้ค่าเริ่มต้น */ }
+      if (OLD_SYNC_URLS.includes((this.sc.url || '').trim())) { this.sc.url = DEFAULT_SYNC_URL; this.sc.since = 0; this.sc.sigs = {}; this.sc.cfgReady = false; }   // ลิงก์เปลี่ยน = เริ่มซิงค์ใหม่กับ Sheet ใหม่
     },
     persistSync() { this.put(SYNC_KEY, this.sc); },
     scheduleSync(ms) {
@@ -1192,18 +1212,69 @@ function dispatchApp() {
     },
     configOf() { const m = Object.assign({}, this.master); delete m.docCounters; return m; },
     id2doc(id) { return this.doc.id === id ? this.doc : this.history.find(h => h.id === id); },
-    async callSheet(payload) {
-      const ctl = new AbortController(), t = setTimeout(() => ctl.abort(), 30000);
+    logSync(kind, text) {
+      this.syncLog.unshift({ t: new Date().toLocaleTimeString('th-TH'), kind, text });
+      if (this.syncLog.length > 30) this.syncLog.length = 30;
+    },
+    snip(text) {
+      const m = /<title>([^<]*)<\/title>/i.exec(text || '');
+      const t = m ? m[1].trim() : String(text || '').replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 100);
+      return t ? ' [' + t + ']' : '';
+    },
+    urlOk(url) { return /^https:\/\/script\.google\.com\/macros\/s\/[^/\s]+\/exec$/.test(url); },
+    async explainNetworkFailure(url) {
+      if (!this.urlOk(url)) return 'URL ไม่ถูกต้อง ต้องเป็นรูปแบบ https://script.google.com/macros/s/.../exec (ไม่ใช่ลิงก์ /dev)';
       try {
-        const res = await fetch(this.sc.url, { method: 'POST', headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-          body: JSON.stringify(Object.assign({ token: this.sc.token }, payload)), redirect: 'follow', signal: ctl.signal });
-        if (!res.ok) throw new Error('HTTP ' + res.status);
-        let j; try { j = await res.json(); } catch (e) { throw new Error('ตอบกลับไม่ใช่ข้อมูลจากสคริปต์ ตรวจสอบว่า Deploy เป็น Web app สิทธิ์ Anyone และวางโค้ด Code.gs แล้ว'); }
-        if (!j.ok) throw new Error(j.error === 'unauthorized' ? 'รหัสลับไม่ถูกต้อง' : (j.error || 'สคริปต์ผิดพลาด'));
-        return j;
+        await fetch(url, { method: 'GET', mode: 'no-cors', redirect: 'follow' });
+        return 'เบราว์เซอร์ถูกบล็อก (CORS) มักเกิดจาก Deploy ที่ไม่ได้ตั้ง Who has access เป็น Anyone หรือยังไม่ได้ Deploy เวอร์ชันใหม่';
       } catch (e) {
-        throw new Error(e && e.name === 'AbortError' ? 'หมดเวลารอการตอบกลับ' : (e && e.message === 'Failed to fetch' ? 'เชื่อมต่อไม่ได้ (ออฟไลน์หรือ URL ไม่ถูกต้อง)' : (e && e.message) || String(e)));
+        return 'ติดต่อ script.google.com ไม่ได้ ตรวจสอบอินเทอร์เน็ต หรือหน้านี้อาจเปิดอยู่ในพรีวิวที่ไม่อนุญาตให้เชื่อมต่อภายนอก (ลองเปิดจาก GitHub Pages)';
+      }
+    },
+    async callSheet(payload) {
+      const url = (this.sc.url || '').trim(), ctl = new AbortController(), t = setTimeout(() => ctl.abort(), 30000);
+      try {
+        let res;
+        try {
+          res = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+            body: JSON.stringify(Object.assign({ token: this.sc.token }, payload)), redirect: 'follow', signal: ctl.signal });
+        } catch (e) {
+          throw new Error(e && e.name === 'AbortError' ? 'หมดเวลารอการตอบกลับ (30 วินาที)' : await this.explainNetworkFailure(url));
+        }
+        const text = await res.text();
+        if (!res.ok) throw new Error('HTTP ' + res.status + this.snip(text));
+        let j; try { j = JSON.parse(text); } catch (e) {
+          throw new Error('สคริปต์ไม่ได้ตอบเป็น JSON' + this.snip(text) + ' ยังไม่ได้วาง Code.gs, ไม่ได้ Deploy เวอร์ชันใหม่ หรือสิทธิ์ไม่ใช่ Anyone');
+        }
+        if (!j.ok) throw new Error(j.error === 'unauthorized' ? 'รหัสลับไม่ถูกต้อง (ตรงกับ TOKEN ใน Code.gs หรือไม่)' : (j.error || 'สคริปต์ผิดพลาด'));
+        return j;
       } finally { clearTimeout(t); }
+    },
+    async diagnoseSheet() {
+      const url = (this.sc.url || '').trim(), steps = [];
+      const add = (ok, label, detail) => { steps.push({ ok, label, detail }); this.diag = steps.slice(); };
+      this.diag = []; this.diagBusy = true;
+      try {
+        const fmt = this.urlOk(url);
+        add(fmt, '1. รูปแบบ URL', fmt ? 'ถูกต้อง' : (url ? 'ต้องเป็น https://script.google.com/macros/s/<ID>/exec (ไม่ใช่ลิงก์ /dev)' : 'ยังไม่ได้กรอก URL'));
+        if (!fmt) return;
+        let reach = false;
+        try { await fetch(url, { method: 'GET', mode: 'no-cors', redirect: 'follow' }); reach = true; } catch (e) { /* ไม่ถึง */ }
+        add(reach, '2. ติดต่อ script.google.com ได้', reach ? 'ได้' : 'ไม่ได้ ตรวจสอบอินเทอร์เน็ต หรือเปิดจาก GitHub Pages แทนหน้าพรีวิว');
+        if (!reach) return;
+        let text = '', status = 0, readable = true;
+        try { const r = await fetch(url, { method: 'GET', redirect: 'follow' }); status = r.status; text = await r.text(); } catch (e) { readable = false; }
+        let g = null; try { g = JSON.parse(text); } catch (e) { /* ไม่ใช่ JSON */ }
+        const getOk = readable && !!(g && g.ok);
+        add(getOk, '3. สคริปต์ตอบกลับ (GET)', getOk ? 'ตอบ JSON ถูกต้อง'
+          : (!readable ? 'เบราว์เซอร์อ่านคำตอบไม่ได้ (CORS) ตั้ง Deploy เป็น Execute as: Me และ Who has access: Anyone แล้ว Deploy เวอร์ชันใหม่'
+            : 'HTTP ' + status + this.snip(text) + ' ยังไม่ได้วาง Code.gs หรือยังไม่ได้ Deploy เวอร์ชันใหม่'));
+        if (!getOk) return;
+        try { await this.callSheet({ action: 'ping' }); add(true, '4. ส่งข้อมูลและตรวจรหัสลับ (POST)', 'สำเร็จ'); }
+        catch (e) { add(false, '4. ส่งข้อมูลและตรวจรหัสลับ (POST)', e.message); return; }
+        const ok = await this.syncNow();
+        add(ok, '5. ซิงค์ข้อมูลจริง', ok ? 'สำเร็จ' : this.syncErr);
+      } finally { this.diagBusy = false; }
     },
     async testSheet() {
       try { await this.callSheet({ action: 'ping' }); this.msg(true, 'เชื่อมต่อ Google Sheet สำเร็จ'); }
@@ -1223,7 +1294,8 @@ function dispatchApp() {
       if (!S.enabled || !S.url) return false;
       if (this.syncBusy) { this.syncAgain = true; return false; }
       this.syncBusy = true; this.syncErr = '';
-      let ok = false;
+      let ok = false, up = 0, down = 0;
+      const t0 = Date.now();
       try {
         for (let round = 0; round < 2; round++) {
           const init = !S.since;      // ครั้งแรก: ดึงจาก Sheet ก่อน แล้วค่อยส่งของที่มีเฉพาะในเครื่องนี้
@@ -1237,10 +1309,12 @@ function dispatchApp() {
           if (ch.counters) S.sigs.counters = ch.counters.sig;
           this.applyRemote(r, new Set(ch.docs.map(x => x.id)), !!ch.config, init);
           S.since = r.now;
+          up += ch.docs.length + ch.deletes.length + (ch.config ? 1 : 0); down += (r.docs || []).length + (r.deletes || []).length;
           if (!init) break;
         }
+        if (up || down || !S.lastOk) this.logSync('ok', 'ซิงค์สำเร็จ ส่งขึ้น ' + up + ' รายการ ดึงลง ' + down + ' รายการ (' + (Date.now() - t0) + ' ms)');
         S.lastOk = new Date().toLocaleTimeString('th-TH'); ok = true;
-      } catch (e) { this.syncErr = (e && e.message) || String(e); }
+      } catch (e) { this.syncErr = (e && e.message) || String(e); this.logSync('err', 'ซิงค์ไม่สำเร็จ: ' + this.syncErr); }
       finally { S.forceCfg = false; this.syncBusy = false; this.persistSync(); }
       if (this.syncAgain) { this.syncAgain = false; this.scheduleSync(500); }
       return ok;
